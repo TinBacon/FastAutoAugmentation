@@ -264,4 +264,11 @@ def _get_builtin_metadata(dataset_name):
             "thing_classes": CITYSCAPES_THING_CLASSES,
             "stuff_classes": CITYSCAPES_STUFF_CLASSES,
         }
+    # Tin
+    # matting 0
+    elif dataset_name == "LIP" or dataset_name == "HUMAN_HALF_MATTING" or dataset_name == "FIND_HUMAN_2000" or dataset_name == "FIND_HUMAN_2000_MATTING" \
+        or dataset_name == "FULLBODY" or dataset_name == "IDDATA" or dataset_name == "MATTING" or dataset_name == "TJ" or dataset_name == "MSCOCO":
+        return {"thing_classes":["true", "false"]}
+    # Bacon
     raise KeyError("No built-in metadata for dataset {}".format(dataset_name))
+

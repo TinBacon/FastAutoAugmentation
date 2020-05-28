@@ -19,13 +19,24 @@ To add new dataset, refer to the tutorial "docs/DATASETS.md".
 
 import os
 
-from detectron2.data import DatasetCatalog, MetadataCatalog
-
-from .builtin_meta import _get_builtin_metadata
-from .cityscapes import load_cityscapes_instances, load_cityscapes_semantic
-from .lvis import get_lvis_instances_meta, register_lvis_instances
-from .pascal_voc import register_pascal_voc
+from detectron2.data import MetadataCatalog, DatasetCatalog
 from .register_coco import register_coco_instances, register_coco_panoptic_separated
+from .lvis import register_lvis_instances, get_lvis_instances_meta
+from .cityscapes import load_cityscapes_instances, load_cityscapes_semantic
+from .bdd import load_bdd_instances, load_bdd_semantic
+from .pascal_voc import register_pascal_voc
+from .builtin_meta import _get_builtin_metadata
+
+# Tin
+from .LIP import load_LIP_semantic
+from .TJ import load_TJ0607_semantic, load_TJ0630_semantic
+from .MATTING import load_MATTING_semantic
+from .IDDATA import load_IDDATA_semantic
+from .HUMAN_HALF import load_HUMAN_HALF_semantic
+from .FULLBODY import load_FULLBODY_semantic
+from .FIND_HUMAN import load_FIND_HUMAN_semantic, load_FIND_HUMAN_MATTING_semantic
+from .MSCOCO import load_MSCOCO_semantic
+# Bacon
 
 # ==== Predefined datasets and splits for COCO ==========
 
@@ -101,7 +112,7 @@ _PREDEFINED_SPLITS_COCO_PANOPTIC = {
 }
 
 
-def register_all_coco(root):
+def register_all_coco(root="datasets"):
     for dataset_name, splits_per_dataset in _PREDEFINED_SPLITS_COCO.items():
         for key, (image_root, json_file) in splits_per_dataset.items():
             # Assume pre-defined datasets live in `./datasets`.
@@ -139,15 +150,11 @@ _PREDEFINED_SPLITS_LVIS = {
         "lvis_v0.5_val": ("coco/val2017", "lvis/lvis_v0.5_val.json"),
         "lvis_v0.5_val_rand_100": ("coco/val2017", "lvis/lvis_v0.5_val_rand_100.json"),
         "lvis_v0.5_test": ("coco/test2017", "lvis/lvis_v0.5_image_info_test.json"),
-    },
-    "lvis_v0.5_cocofied": {
-        "lvis_v0.5_train_cocofied": ("coco/train2017", "lvis/lvis_v0.5_train_cocofied.json"),
-        "lvis_v0.5_val_cocofied": ("coco/val2017", "lvis/lvis_v0.5_val_cocofied.json"),
-    },
+    }
 }
 
 
-def register_all_lvis(root):
+def register_all_lvis(root="datasets"):
     for dataset_name, splits_per_dataset in _PREDEFINED_SPLITS_LVIS.items():
         for key, (image_root, json_file) in splits_per_dataset.items():
             # Assume pre-defined datasets live in `./datasets`.
@@ -169,7 +176,7 @@ _RAW_CITYSCAPES_SPLITS = {
 }
 
 
-def register_all_cityscapes(root):
+def register_all_cityscapes(root="datasets"):
     for key, (image_dir, gt_dir) in _RAW_CITYSCAPES_SPLITS.items():
         meta = _get_builtin_metadata("cityscapes")
         image_dir = os.path.join(root, image_dir)
@@ -183,7 +190,7 @@ def register_all_cityscapes(root):
             ),
         )
         MetadataCatalog.get(inst_key).set(
-            image_dir=image_dir, gt_dir=gt_dir, evaluator_type="cityscapes_instance", **meta
+            image_dir=image_dir, gt_dir=gt_dir, evaluator_type="cityscapes", **meta
         )
 
         sem_key = key.format(task="sem_seg")
@@ -191,12 +198,274 @@ def register_all_cityscapes(root):
             sem_key, lambda x=image_dir, y=gt_dir: load_cityscapes_semantic(x, y)
         )
         MetadataCatalog.get(sem_key).set(
-            image_dir=image_dir, gt_dir=gt_dir, evaluator_type="cityscapes_sem_seg", **meta
+            image_dir=image_dir, gt_dir=gt_dir, evaluator_type="sem_seg", **meta
         )
 
 
+_RAW_BDD_SPLITS = {
+    "cityscapes_bdd_{task}_train": ("bdd/train/images", "bdd/train/label_ids"),
+    "cityscapes_bdd_{task}_val": ("bdd/val/images", "bdd/val/label_ids"),
+}
+
+
+def register_all_bdd(root="datasets"):
+    for key, (image_dir, gt_dir) in _RAW_BDD_SPLITS.items():
+        meta = _get_builtin_metadata("cityscapes")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        # inst_key = key.format(task="instance_seg")
+        # DatasetCatalog.register(
+        #     inst_key,
+        #     lambda x=image_dir, y=gt_dir: load_bdd_instances(
+        #         x, y, from_json=True, to_polygons=True
+        #     ),
+        # )
+        # MetadataCatalog.get(inst_key).set(
+        #     image_dir=image_dir, gt_dir=gt_dir, evaluator_type="cityscapes", **meta
+        # )
+
+        sem_key = key.format(task="sem_seg")
+        DatasetCatalog.register(
+            sem_key, lambda x=image_dir, y=gt_dir: load_bdd_semantic(x, y)
+        )
+        MetadataCatalog.get(sem_key).set(
+            image_dir=image_dir, gt_dir=gt_dir, evaluator_type="sem_seg", **meta
+        )
+
+
+# Tin
+# Matting 0
+bg_dir = "/data/zhubingke/Alpha_Aug/bg_images"
+
+# ==== 1. Predefined splits for LIP ===========
+_RAW_LIP_SPLITS = {
+    "LIP_train":("train_image", "train_segmentation"),
+    "LIP_autoaug_train":("autoaug_train_image", "autoaug_train_segmentation"),
+    "LIP_autoaug_test":("autoaug_test_image", "autoaug_test_segmentation"),
+    "LIP_smoke_train":("smoke_train", "smoke_train_seg"),
+    "LIP_test":("test_image", "INVALID"),
+}
+
+def register_all_LIP(root="/data/zhubingke/LIP-Portrait/"):
+    for key, (image_dir, gt_dir) in _RAW_LIP_SPLITS.items():
+        meta = _get_builtin_metadata("LIP")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+        
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_LIP_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+# ==== 2. Predefined splits for MATTING ===========
+_RAW_HUMAN_HALF_MATTING_SPLITS = {
+    "HUMAN_HALF_MATTING_train":("image", "alpha"),
+    # "HUMAN_HALF_MATTING_test":("val_image", "val_segmentation"),
+}
+
+def register_all_HUMAN_HALF_MATTING(root="/data/zhubingke/matting_human_half"):
+    for key, (image_dir, gt_dir) in _RAW_HUMAN_HALF_MATTING_SPLITS.items():
+        meta = _get_builtin_metadata("HUMAN_HALF_MATTING")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_HUMAN_HALF_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+
+# ==== 3. Predefined splits for FINDHUMAN2000 ===========
+_RAW_FIND_HUMAN_2000_SPLITS = {
+    "FIND_HUMAN_2000_train":("Images", "Labels20170424/Labels"),
+    # "FIND_HUMAN_2000_test":("test", "val_segmentation"),
+}
+
+def register_all_FIND_HUMAN_2000(root="/data/zhubingke/findhuman/2000"):
+    for key, (image_dir, gt_dir) in _RAW_FIND_HUMAN_2000_SPLITS.items():
+        meta = _get_builtin_metadata("FIND_HUMAN_2000")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_FIND_HUMAN_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+
+# ==== 4. Predefined splits for FINDHUMAN2000MATTING ===========
+_RAW_FIND_HUMAN_2000_MATTING_SPLITS = {
+    "FIND_HUMAN_2000_MATTING_train":("image", "label"),
+    # "FIND_HUMAN_2000_MATTING_test":("val_image", "val_segmentation"),
+}
+
+def register_all_FIND_HUMAN_2000_MATTING(root="/data/zhubingke/findhuman/2000/matting_data/training_new"):
+    for key, (image_dir, gt_dir) in _RAW_FIND_HUMAN_2000_MATTING_SPLITS.items():
+        meta = _get_builtin_metadata("FIND_HUMAN_2000_MATTING")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_FIND_HUMAN_MATTING_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+
+# ==== 5. Predefined splits for FULLBODYPRETRAINED ===========
+_RAW_FULLBODY_PRETRAINED_SPLITS = {
+    "FULLBODY_PRETRAINED_train":("pretrain_img", "pretrain_alpha"),
+    # "FULLBODY_PRETRAINED_test":("val_image", "val_segmentation"),
+}
+
+def register_all_FULLBODY_PRETRAINED(root="/data/zhubingke/Alpha_Aug/Full_Body_MultiHuman_Data_20191119"):
+    for key, (image_dir, gt_dir) in _RAW_FULLBODY_PRETRAINED_SPLITS.items():
+        meta = _get_builtin_metadata("FULLBODY")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_FULLBODY_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+
+# ==== 6. Predefined splits for FULLBODYPRETRAINED ===========
+_RAW_FULLBODY_SPLITS = {
+    "FULLBODY_train":("img", "alpha"),
+    # "FULLBODY_test":("val_image", "val_segmentation"),
+}
+
+def register_all_FULLBODY(root="/data/zhubingke/Alpha_Aug/Full_Body_MultiHuman_Data_20191119"):
+    for key, (image_dir, gt_dir) in _RAW_FULLBODY_SPLITS.items():
+        meta = _get_builtin_metadata("FULLBODY")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_FULLBODY_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+
+# ==== 7. Predefined splits for IDData_20190604 ===========
+_RAW_IDDATA_20190604 = {
+    "IDDATA_20190604_train":("img", "alpha"),
+    # "IDDATA_20190604_test":("val_image", "val_segmentation"),
+}
+
+def register_all_IDDATA_20190604(root="/data/zhubingke/Alpha_Aug/IDData_20190604"):
+    for key, (image_dir, gt_dir) in _RAW_IDDATA_20190604.items():
+        meta = _get_builtin_metadata("IDDATA")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_IDDATA_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+
+# ==== 8. Predefined splits for matting_190619 ===========
+_RAW_MATTING_190619 = {
+    "MATTING_190619_train":("img", "alpha"),
+    # "MATTING_190619_test":("val_image", "val_segmentation"),
+}
+
+def register_all_MATTING_190619(root="/data/zhubingke/Alpha_Aug/matting_190619"):
+    for key, (image_dir, gt_dir) in _RAW_MATTING_190619.items():
+        meta = _get_builtin_metadata("MATTING")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_MATTING_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+
+# ==== 9. Predefined splits for matting_190705 ===========
+_RAW_MATTING_190705 = {
+    "MATTING_190705_train":("img", "alpha"),
+    # "MATTING_190705_test":("val_image", "val_segmentation"),
+}
+
+def register_all_MATTING_190705(root="/data/zhubingke/Alpha_Aug/matting_190705"):
+    for key, (image_dir, gt_dir) in _RAW_MATTING_190705.items():
+        meta = _get_builtin_metadata("MATTING")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_MATTING_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+
+# ==== 10. Predefined splits for matting_190909 ===========
+_RAW_MATTING_190909 = {
+    "MATTING_190909_train":("img", "alpha"),
+    # "MATTING_190909_test":("val_image", "val_segmentation"),
+}
+
+def register_all_MATTING_190909(root="/data/zhubingke/Alpha_Aug/matting_190909"):
+    for key, (image_dir, gt_dir) in _RAW_MATTING_190909.items():
+        meta = _get_builtin_metadata("MATTING")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_MATTING_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+
+# ==== 11. Predefined splits for matting_190912 ===========
+_RAW_MATTING_190912 = {
+    "MATTING_190912_train":("img", "alpha"),
+    # "MATTING_190912_test":("val_image", "val_segmentation"),
+}
+
+def register_all_MATTING_190912(root="/data/zhubingke/Alpha_Aug/matting_190912"):
+    for key, (image_dir, gt_dir) in _RAW_MATTING_190912.items():
+        meta = _get_builtin_metadata("MATTING")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_MATTING_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+
+# ==== 12. Predefined splits for TJ0630 ===========
+_RAW_TJ0630 = {
+    "TJ0630_train":("rgba", "alph"),
+    # "TJ0630_test":("val_image", "val_segmentation"),
+}
+
+def register_all_TJ0630(root="/data/zhubingke/tj0630"):
+    for key, (image_dir, gt_dir) in _RAW_TJ0630.items():
+        meta = _get_builtin_metadata("TJ")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_TJ0630_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+
+# ==== 13. Predefined splits for TJ0607 ===========
+_RAW_TJ0607 = {
+    "TJ0607_train":("rgb", "alpha"),
+    # "TJ0607_test":("val_image", "val_segmentation"),
+}
+
+def register_all_TJ0607(root="/data/zhubingke/tj0607"):
+    for key, (image_dir, gt_dir) in _RAW_TJ0607.items():
+        meta = _get_builtin_metadata("TJ")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_TJ0607_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+
+
+# ==== 14. Predefined splits for MSCOCO ===========
+_RAW_MSCOCOHUMANPLUS = {
+    "MSCOCOHUMANPLUS_train":("img", "mask"),
+    # "MSCOCOHUMANPLUS_test":("val_image", "val_segmentation"),
+}
+
+def register_all_MSCOCOHUMANPLUS(root="/data/zhubingke/MSCOCOHumanPlus/Supervisely_Join"):
+    for key, (image_dir, gt_dir) in _RAW_MSCOCOHUMANPLUS.items():
+        meta = _get_builtin_metadata("MSCOCO")
+        image_dir = os.path.join(root, image_dir)
+        gt_dir = os.path.join(root, gt_dir)
+
+        DatasetCatalog.register(key, lambda x=image_dir, y=gt_dir, z=bg_dir: load_MSCOCO_semantic(x, y, z))
+        MetadataCatalog.get(key).set(iamge_dir=image_dir, gt_dir=gt_dir, evaluator_type="MATTING", **meta)
+# Bacon
+
 # ==== Predefined splits for PASCAL VOC ===========
-def register_all_pascal_voc(root):
+def register_all_pascal_voc(root="datasets"):
     SPLITS = [
         ("voc_2007_trainval", "VOC2007", "trainval"),
         ("voc_2007_train", "VOC2007", "train"),
@@ -213,8 +482,25 @@ def register_all_pascal_voc(root):
 
 
 # Register them all under "./datasets"
-_root = os.getenv("DETECTRON2_DATASETS", "datasets")
-register_all_coco(_root)
-register_all_lvis(_root)
-register_all_cityscapes(_root)
-register_all_pascal_voc(_root)
+register_all_coco()
+register_all_lvis()
+register_all_cityscapes()
+register_all_bdd()
+register_all_pascal_voc()
+# Tin
+# matting 1
+register_all_LIP()
+register_all_HUMAN_HALF_MATTING()
+register_all_FIND_HUMAN_2000()
+register_all_FIND_HUMAN_2000_MATTING()
+register_all_FULLBODY_PRETRAINED()
+register_all_FULLBODY()
+register_all_IDDATA_20190604()
+register_all_MATTING_190619()
+register_all_MATTING_190705()
+register_all_MATTING_190909()
+register_all_MATTING_190912()
+register_all_TJ0630()
+register_all_TJ0607()
+register_all_MSCOCOHUMANPLUS()
+# Bacon
