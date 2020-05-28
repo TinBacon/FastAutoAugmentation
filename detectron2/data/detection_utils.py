@@ -33,68 +33,6 @@ class SizeMismatchError(ValueError):
     """
 
 
-# https://en.wikipedia.org/wiki/YUV#SDTV_with_BT.601
-_M_RGB2YUV = [[0.299, 0.587, 0.114], [-0.14713, -0.28886, 0.436], [0.615, -0.51499, -0.10001]]
-_M_YUV2RGB = [[1.0, 0.0, 1.13983], [1.0, -0.39465, -0.58060], [1.0, 2.03211, 0.0]]
-
-
-def convert_PIL_to_numpy(image, format):
-    """
-    Convert PIL image to numpy array of target format.
-
-    Args:
-        image (PIL.Image): a PIL image
-        format (str): the format of output image
-
-    Returns:
-        (np.ndarray): also see `read_image`
-    """
-    if format is not None:
-        # PIL only supports RGB, so convert to RGB and flip channels over below
-        conversion_format = format
-        if format in ["BGR", "YUV-BT.601"]:
-            conversion_format = "RGB"
-        image = image.convert(conversion_format)
-    image = np.asarray(image)
-    # PIL squeezes out the channel dimension for "L", so make it HWC
-    if format == "L":
-        image = np.expand_dims(image, -1)
-
-    # handle formats not supported by PIL
-    elif format == "BGR":
-        # flip channels if needed
-        image = image[:, :, ::-1]
-    elif format == "YUV-BT.601":
-        image = image / 255.0
-        image = np.dot(image, np.array(_M_RGB2YUV).T)
-
-    return image
-
-
-def convert_image_to_rgb(image, format):
-    """
-    Convert numpy image from given format to RGB.
-
-    Args:
-        image (np.ndarray): a numpy image
-        format (str): the format of input image, also see `read_image`
-
-    Returns:
-        (np.ndarray): HWC RGB image in 0-255 range, can be either float or uint8
-    """
-    if format == "BGR":
-        image = image[:, :, [2, 1, 0]]
-    elif format == "YUV-BT.601":
-        image = np.dot(image, np.array(_M_YUV2RGB).T)
-        image = image * 255.0
-    else:
-        if format == "L":
-            image = image[:, :, 0]
-        image = image.astype(np.uint8)
-        image = np.asarray(Image.fromarray(image, mode=format).convert("RGB"))
-    return image
-
-
 def read_image(file_name, format=None):
     """
     Read an image into the given format.
@@ -102,11 +40,10 @@ def read_image(file_name, format=None):
 
     Args:
         file_name (str): image file path
-        format (str): one of the supported image modes in PIL, or "BGR" or "YUV-BT.601"
+        format (str): one of the supported image modes in PIL, or "BGR"
 
     Returns:
-        image (np.ndarray): an HWC image in the given format, which is 0-255, uint8 for
-            supported image modes in PIL or "BGR"; float (0-1 for Y) for YUV-BT.601.
+        image (np.ndarray): an HWC image in the given format.
     """
     with PathManager.open(file_name, "rb") as f:
         image = Image.open(f)
@@ -117,7 +54,20 @@ def read_image(file_name, format=None):
         except Exception:
             pass
 
-        return convert_PIL_to_numpy(image, format)
+        if format is not None:
+            # PIL only supports RGB, so convert to RGB and flip channels over below
+            conversion_format = format
+            if format == "BGR":
+                conversion_format = "RGB"
+            image = image.convert(conversion_format)
+        image = np.asarray(image)
+        if format == "BGR":
+            # flip channels if needed
+            image = image[:, :, ::-1]
+        # PIL squeezes out the channel dimension for "L", so make it HWC
+        if format == "L":
+            image = np.expand_dims(image, -1)
+        return image
 
 
 def check_image_size(dataset_dict, image):
@@ -375,7 +325,7 @@ def annotations_to_instances_rotated(annos, image_size):
     return target
 
 
-def filter_empty_instances(instances, by_box=True, by_mask=True, box_threshold=1e-5):
+def filter_empty_instances(instances, by_box=True, by_mask=True):
     """
     Filter out empty instances in an `Instances` object.
 
@@ -383,7 +333,6 @@ def filter_empty_instances(instances, by_box=True, by_mask=True, box_threshold=1
         instances (Instances):
         by_box (bool): whether to filter out instances with empty boxes
         by_mask (bool): whether to filter out instances with empty masks
-        box_threshold (float): minimum width and height to be considered non-empty
 
     Returns:
         Instances: the filtered instances.
@@ -391,7 +340,7 @@ def filter_empty_instances(instances, by_box=True, by_mask=True, box_threshold=1
     assert by_box or by_mask
     r = []
     if by_box:
-        r.append(instances.gt_boxes.nonempty(threshold=box_threshold))
+        r.append(instances.gt_boxes.nonempty())
     if instances.has("gt_masks") and by_mask:
         r.append(instances.gt_masks.nonempty())
 
@@ -486,7 +435,7 @@ def check_metadata_consistency(key, dataset_names):
             raise ValueError("Datasets have different metadata '{}'!".format(key))
 
 
-def build_transform_gen(cfg, is_train):
+def build_transform_gen(cfg, is_train, policies=None):
     """
     Create a list of :class:`TransformGen` from config.
     Now it includes resizing and flipping.
@@ -498,10 +447,20 @@ def build_transform_gen(cfg, is_train):
         min_size = cfg.INPUT.MIN_SIZE_TRAIN
         max_size = cfg.INPUT.MAX_SIZE_TRAIN
         sample_style = cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING
+        # Tin
+        # matting 0
+        tmp_size = [np.random.choice(cfg.INPUT.TMP_SIZE)]
+        # fast_autoaug 0
+        cutout = cfg.INPUT.CUTOUT
+        # Bacon
     else:
         min_size = cfg.INPUT.MIN_SIZE_TEST
         max_size = cfg.INPUT.MAX_SIZE_TEST
         sample_style = "choice"
+        # Tin 
+        # matting 1
+        tmp_size = cfg.INPUT.TMP_SIZE
+        # Bacon
     if sample_style == "range":
         assert len(min_size) == 2, "more than 2 ({}) min_size(s) are provided for ranges".format(
             len(min_size)
@@ -509,8 +468,24 @@ def build_transform_gen(cfg, is_train):
 
     logger = logging.getLogger(__name__)
     tfm_gens = []
+    # Tin 
+    # matting 2
+    if is_train and tmp_size[0]>0:
+        if len(tmp_size)==1:
+            tmp_size = tmp_size[0]
+        tfm_gens.append(T.MattingResize(tmp_size))
+    # Bacon
     tfm_gens.append(T.ResizeShortestEdge(min_size, max_size, sample_style))
     if is_train:
         tfm_gens.append(T.RandomFlip())
+        # Tin 
+        # matting 3
+        tfm_gens.append(T.randomShiftScaleRotate())
+        tfm_gens.append(T.Rotate90())
+        # fast_autoaug 1
+        if cfg.AUTOAUG.NUM_POLICY:
+            tfm_gens.insert(0, T.AutoAug(policies))
+        # Bacon
         logger.info("TransformGens used in training: " + str(tfm_gens))
+        
     return tfm_gens
