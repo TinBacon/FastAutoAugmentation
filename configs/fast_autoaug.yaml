@@ -1,0 +1,20 @@
+_BASE_: "LIP.yaml"
+DATASETS:
+  TRAIN: ("LIP_autoaug_train",)
+  # TRAIN: ("LIP_smoke_train",)
+  TEST: ("LIP_autoaug_test",)
+  KFOLD: 1
+AUTOAUG:
+  NUM_POLICY: 5
+  NUM_OP: 2
+  NUM_SEARCH: 200
+  NUM_FINAL_POLICIES: 10
+  METRIC: "top1_valid" # or minus_loss
+  MODE: "max"          # or min
+  RESOURCES_PER_TRIAL: "gpu:0.5"
+  SMOKE_TEST: False
+INPUT:
+  BINARY: True
+OUTPUT_DIR: "./output/autoaug_pre_search"
+TEST:
+  EVAL_PERIOD: 5000

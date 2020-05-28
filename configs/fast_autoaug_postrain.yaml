@@ -1,0 +1,14 @@
+_BASE_: "LIP.yaml"
+INPUT:
+  BINARY: True
+DATASETS:
+  TRAIN: ("",)
+  TEST: ("",)
+AUTOAUG:
+  NUM_POLICY: 5
+SOLVER:
+  IMS_PER_BATCH: 
+  BASE_LR: 
+  STEPS: 
+  MAX_ITER: 
+OUTPUT_DIR: "./output/autoaug_post_train"
