@@ -3,18 +3,15 @@
 # File: transform.py
 
 import numpy as np
-import torch
-import torch.nn.functional as F
 from fvcore.transforms.transform import HFlipTransform, NoOpTransform, Transform
 from PIL import Image
+import cv2
+import random
+import logging
 
-try:
-    import cv2  # noqa
-except ImportError:
-    # OpenCV is an optional dependency at the moment
-    pass
+from detectron2.utils.autoaug import *
 
-__all__ = ["ExtentTransform", "ResizeTransform", "RotationTransform"]
+__all__ = ["ExtentTransform", "ResizeTransform", "RotateTransform", "MattingTransform", "CutoutTransform", "AutoAugTransform"]
 
 
 class ExtentTransform(Transform):
@@ -73,40 +70,23 @@ class ResizeTransform(Transform):
     Resize the image to a target size.
     """
 
-    def __init__(self, h, w, new_h, new_w, interp=None):
+    def __init__(self, h, w, new_h, new_w, interp):
         """
         Args:
             h, w (int): original image size
             new_h, new_w (int): new image size
-            interp: PIL interpolation methods, defaults to bilinear.
+            interp: PIL interpolation methods
         """
         # TODO decide on PIL vs opencv
         super().__init__()
-        if interp is None:
-            interp = Image.BILINEAR
         self._set_attributes(locals())
 
     def apply_image(self, img, interp=None):
         assert img.shape[:2] == (self.h, self.w)
-        assert len(img.shape) <= 4
-
-        if img.dtype == np.uint8:
-            pil_image = Image.fromarray(img)
-            interp_method = interp if interp is not None else self.interp
-            pil_image = pil_image.resize((self.new_w, self.new_h), interp_method)
-            ret = np.asarray(pil_image)
-        else:
-            # PIL only supports uint8
-            img = torch.from_numpy(img)
-            shape = list(img.shape)
-            shape_4d = shape[:2] + [1] * (4 - len(shape)) + shape[2:]
-            img = img.view(shape_4d).permute(2, 3, 0, 1)  # hw(c) -> nchw
-            _PIL_RESIZE_TO_INTERPOLATE_MODE = {Image.BILINEAR: "bilinear", Image.BICUBIC: "bicubic"}
-            mode = _PIL_RESIZE_TO_INTERPOLATE_MODE[self.interp]
-            img = F.interpolate(img, (self.new_h, self.new_w), mode=mode, align_corners=False)
-            shape[:2] = (self.new_h, self.new_w)
-            ret = img.permute(2, 3, 0, 1).view(shape).numpy()  # nchw -> hw(c)
-
+        pil_image = Image.fromarray(img)
+        interp_method = interp if interp is not None else self.interp
+        pil_image = pil_image.resize((self.new_w, self.new_h), interp_method)
+        ret = np.asarray(pil_image)
         return ret
 
     def apply_coords(self, coords):
@@ -118,83 +98,135 @@ class ResizeTransform(Transform):
         segmentation = self.apply_image(segmentation, interp=Image.NEAREST)
         return segmentation
 
-    def inverse(self):
-        return ResizeTransform(self.new_h, self.new_w, self.h, self.w, self.interp)
-
-
-class RotationTransform(Transform):
-    """
-    This method returns a copy of this image, rotated the given
-    number of degrees counter clockwise around its center.
-    """
-
-    def __init__(self, h, w, angle, expand=True, center=None, interp=None):
-        """
-        Args:
-            h, w (int): original image size
-            angle (float): degrees for rotation
-            expand (bool): choose if the image should be resized to fit the whole
-                rotated image (default), or simply cropped
-            center (tuple (width, height)): coordinates of the rotation center
-                if left to None, the center will be fit to the center of each image
-                center has no effect if expand=True because it only affects shifting
-            interp: cv2 interpolation method, default cv2.INTER_LINEAR
-        """
+# Tin
+# matting 0
+class RotateTransform(Transform):
+    def __init__(self, h, w, box0, box1):
         super().__init__()
-        image_center = np.array((w / 2, h / 2))
-        if center is None:
-            center = image_center
-        if interp is None:
-            interp = cv2.INTER_LINEAR
-        abs_cos, abs_sin = abs(np.cos(np.deg2rad(angle))), abs(np.sin(np.deg2rad(angle)))
-        if expand:
-            # find the new width and height bounds
-            bound_w, bound_h = np.rint(
-                [h * abs_sin + w * abs_cos, h * abs_cos + w * abs_sin]
-            ).astype(int)
-        else:
-            bound_w, bound_h = w, h
-
-        self._set_attributes(locals())
-        self.rm_coords = self.create_rotation_matrix()
-        # Needed because of this problem https://github.com/opencv/opencv/issues/11784
-        self.rm_image = self.create_rotation_matrix(offset=-0.5)
-
-    def apply_image(self, img, interp=None):
-        """
-        img should be a numpy array, formatted as Height * Width * Nchannels
-        """
-        if len(img) == 0 or self.angle % 360 == 0:
-            return img
-        assert img.shape[:2] == (self.h, self.w)
-        interp = interp if interp is not None else self.interp
-        return cv2.warpAffine(img, self.rm_image, (self.bound_w, self.bound_h), flags=interp)
-
-    def apply_coords(self, coords):
-        """
-        coords should be a N * 2 array-like, containing N couples of (x, y) points
-        """
-        coords = np.asarray(coords, dtype=float)
-        if len(coords) == 0 or self.angle % 360 == 0:
-            return coords
-        return cv2.transform(coords[:, np.newaxis, :], self.rm_coords)[:, 0, :]
+        
+        self.rotate     = np.random.random()<0.5
+        self.borderMode = cv2.BORDER_CONSTANT
+        self.scale      = (w, h)
+        self.mat        = cv2.getPerspectiveTransform(box0, box1)
+    
+    def apply_image(self, image, interp=cv2.INTER_LINEAR, borderValue=(0, 0, 0)):
+        if self.rotate:
+            image = cv2.warpPerspective(image, self.mat, self.scale, flags=interp, borderMode=self.borderMode, borderValue=borderValue)
+        return image
 
     def apply_segmentation(self, segmentation):
-        segmentation = self.apply_image(segmentation, interp=cv2.INTER_NEAREST)
+        segmentation = self.apply_image(segmentation, interp=cv2.INTER_NEAREST, borderValue=(255))
         return segmentation
 
-    def create_rotation_matrix(self, offset=0):
-        center = (self.center[0] + offset, self.center[1] + offset)
-        rm = cv2.getRotationMatrix2D(tuple(center), self.angle, 1)
-        if self.expand:
-            # Find the coordinates of the center of rotation in the new image
-            # The only point for which we know the future coordinates is the center of the image
-            rot_im_center = cv2.transform(self.image_center[None, None, :] + offset, rm)[0, 0, :]
-            new_center = np.array([self.bound_w / 2, self.bound_h / 2]) + offset - rot_im_center
-            # shift the rotation center to the new coordinates
-            rm[:, 2] += new_center
-        return rm
+    def apply_coords(self, coords):
+        pass
 
+class MattingTransform(Transform):
+
+    def __init__(self, input_size):
+        super().__init__()
+        
+        self.input_size = input_size
+    
+    def apply_image(self, image, interp=cv2.INTER_LINEAR):
+        
+        return cv2.resize(image, (self.input_size, self.input_size), interpolation=interp)
+
+    def apply_segmentation(self, segmentation):
+        
+        return self.apply_image(segmentation, interp=cv2.INTER_NEAREST)
+
+    def apply_coords(self, coords):
+        pass
+
+# fast autoaug 0
+class CutoutTransform(Transform):
+
+    def __init__(self, length):
+        super().__init__()
+        
+        self.length = length
+        self.seed = [random.random(), random.random()]
+        self.fill = 255.
+    
+    def apply_image(self, img):
+
+        if not self.length:
+            return img
+
+        h, w = img.size(1), img.size(2)
+        mask = np.ones((h, w), np.float32)
+        y = h * self.seed[0]
+        x = w * self.seed[1]
+
+        y1 = np.clip(y - self.length // 2, 0, h)
+        y2 = np.clip(y + self.length // 2, 0, h)
+        x1 = np.clip(x - self.length // 2, 0, w)
+        x2 = np.clip(x + self.length // 2, 0, w)
+
+        mask[y1: y2, x1: x2] = self.fill
+        mask = torch.from_numpy(mask)
+        mask = mask.expand_as(img)
+        img *= mask
+
+        return img
+
+    def apply_segmentation(self, segmentation):
+        
+        return self.apply_image(segmentation)
+
+    def apply_coords(self, coords):
+        pass
+
+class AutoAugTransform(Transform):
+
+    def __init__(self, policies):
+        super().__init__()
+        
+        self.policy       = random.choice(policies)
+        # random augmentation
+        self.aug_seed     = [random.random() for _ in self.policy]
+        # some augments are not fit with labels
+        self.not_seg      = ["AutoContrast", "Invert", "Equalize", "Solarize", "Posterize", "Contrast", "Color", "Brightness", "Sharpness"]
+        # some augments can neg the magnitude
+        self.mirror       = ["ShearX", "ShearY", "TranslateX", "TranslateY", "TranslateXAbs", "TranslateYAbs", "Rotate"]
+        self.mirror_seed  = [random.random() for _ in self.policy]
+
+    
+    def apply_image(self, img, seg=False):
+
+        logger = logging.getLogger("detectron2.trainer")
+
+        img = Image.fromarray(img)
+        for i, (name, pr, level) in enumerate(self.policy):
+            
+            # some augments are not fit with labels
+            if self.aug_seed[i] > pr or (seg and name in self.not_seg):
+                continue
+            
+            augment_fn, low, high = augment_dict[name]
+            magnitude = level * (high - low) + low
+
+            # random mirror 
+            if name in self.mirror and self.mirror_seed[i] > 0.5:
+                magnitude = -magnitude
+
+            # data augment
+            img = augment_fn(img, magnitude)
+
+            if len(np.unique(img))==1:
+                logger.info("transform {} make the image wrong".format(name))
+
+        return np.array(img)
+
+    def apply_segmentation(self, segmentation):
+        
+        return self.apply_image(segmentation, True)
+
+    def apply_coords(self, coords):
+        pass
+
+# Bacon
 
 def HFlip_rotated_box(transform, rotated_boxes):
     """
