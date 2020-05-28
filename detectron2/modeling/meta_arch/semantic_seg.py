@@ -9,6 +9,7 @@ from torch.nn import functional as F
 from detectron2.layers import Conv2d, ShapeSpec
 from detectron2.structures import ImageList
 from detectron2.utils.registry import Registry
+from detectron2.utils.lovasz_losses import lovasz_softmax
 
 from ..backbone import build_backbone
 from ..postprocessing import sem_seg_postprocess
@@ -18,7 +19,7 @@ __all__ = ["SemanticSegmentor", "SEM_SEG_HEADS_REGISTRY", "SemSegFPNHead", "buil
 
 
 SEM_SEG_HEADS_REGISTRY = Registry("SEM_SEG_HEADS")
-SEM_SEG_HEADS_REGISTRY.__doc__ = """
+"""
 Registry for semantic segmentation heads, which make semantic segmentation predictions
 from feature maps.
 """
@@ -32,40 +33,39 @@ class SemanticSegmentor(nn.Module):
 
     def __init__(self, cfg):
         super().__init__()
+
+        self.device = torch.device(cfg.MODEL.DEVICE)
+
         self.backbone = build_backbone(cfg)
         self.sem_seg_head = build_sem_seg_head(cfg, self.backbone.output_shape())
-        self.register_buffer("pixel_mean", torch.Tensor(cfg.MODEL.PIXEL_MEAN).view(-1, 1, 1))
-        self.register_buffer("pixel_std", torch.Tensor(cfg.MODEL.PIXEL_STD).view(-1, 1, 1))
 
-    @property
-    def device(self):
-        return self.pixel_mean.device
+        pixel_mean = torch.Tensor(cfg.MODEL.PIXEL_MEAN).to(self.device).view(-1, 1, 1)
+        pixel_std = torch.Tensor(cfg.MODEL.PIXEL_STD).to(self.device).view(-1, 1, 1)
+        self.normalizer = lambda x: (x - pixel_mean) / pixel_std
+
+        self.to(self.device)
 
     def forward(self, batched_inputs):
         """
         Args:
-            batched_inputs: a list, batched outputs of :class:`DatasetMapper`.
+            batched_inputs: a list, batched outputs of :class:`DatasetMapper` .
                 Each item in the list contains the inputs for one image.
 
-                For now, each item in the list is a dict that contains:
-
-                   * "image": Tensor, image in (C, H, W) format.
-                   * "sem_seg": semantic segmentation ground truth
-                   * Other information that's included in the original dicts, such as:
-                     "height", "width" (int): the output resolution of the model, used in inference.
-                     See :meth:`postprocess` for details.
+        For now, each item in the list is a dict that contains:
+            image: Tensor, image in (C, H, W) format.
+            sem_seg: semantic segmentation ground truth
+            Other information that's included in the original dicts, such as:
+                "height", "width" (int): the output resolution of the model, used in inference.
+                    See :meth:`postprocess` for details.
 
         Returns:
-            list[dict]:
-              Each dict is the output for one input image.
-              The dict contains one key "sem_seg" whose value is a
-              Tensor that represents the
-              per-pixel segmentation prediced by the head.
-              The prediction has shape KxHxW that represents the logits of
-              each class for each pixel.
+            list[dict]: Each dict is the output for one input image.
+                The dict contains one key "sem_seg" whose value is a
+                Tensor of the output resolution that represents the
+                per-pixel segmentation prediction.
         """
         images = [x["image"].to(self.device) for x in batched_inputs]
-        images = [(x - self.pixel_mean) / self.pixel_std for x in images]
+        images = [self.normalizer(x) for x in images]
         images = ImageList.from_tensors(images, self.backbone.size_divisibility)
 
         features = self.backbone(images.tensor)
@@ -102,9 +102,9 @@ def build_sem_seg_head(cfg, input_shape):
 @SEM_SEG_HEADS_REGISTRY.register()
 class SemSegFPNHead(nn.Module):
     """
-    A semantic segmentation head described in :paper:`PanopticFPN`.
-    It takes FPN features as input and merges information from all
-    levels of the FPN into single output.
+    A semantic segmentation head described in detail in the Panoptic Feature Pyramid Networks paper
+    (https://arxiv.org/abs/1901.02446). It takes FPN features as input and merges information from
+    all levels of the FPN into single output.
     """
 
     def __init__(self, cfg, input_shape: Dict[str, ShapeSpec]):
@@ -120,6 +120,7 @@ class SemSegFPNHead(nn.Module):
         self.common_stride    = cfg.MODEL.SEM_SEG_HEAD.COMMON_STRIDE
         norm                  = cfg.MODEL.SEM_SEG_HEAD.NORM
         self.loss_weight      = cfg.MODEL.SEM_SEG_HEAD.LOSS_WEIGHT
+        self.use_lovasz       = cfg.MODEL.SEM_SEG_HEAD.USE_LOVASZ
         # fmt: on
 
         self.scale_heads = []
@@ -152,35 +153,47 @@ class SemSegFPNHead(nn.Module):
         weight_init.c2_msra_fill(self.predictor)
 
     def forward(self, features, targets=None):
-        """
-        Returns:
-            In training, returns (None, dict of losses)
-            In inference, returns (CxHxW logits, {})
-        """
-        x = self.layers(features)
-        if self.training:
-            return None, self.losses(x, targets)
-        else:
-            x = F.interpolate(
-                x, scale_factor=self.common_stride, mode="bilinear", align_corners=False
-            )
-            return x, {}
-
-    def layers(self, features):
         for i, f in enumerate(self.in_features):
             if i == 0:
                 x = self.scale_heads[i](features[f])
             else:
                 x = x + self.scale_heads[i](features[f])
         x = self.predictor(x)
-        return x
+        x = F.interpolate(x, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
+        # Tin
+        # fast_autoaug 0
+        
+        # if self.training:
+        #     losses = {}
+        #     if self.use_lovasz:
+        #         losses["loss_sem_seg"] = (
+        #             (F.cross_entropy(x, targets, reduction="mean", ignore_index=self.ignore_value)
+        #             + lovasz_softmax(F.softmax(x, 1), targets, ignore=self.ignore_value))
+        #             * self.loss_weight
+        #         )
+        #     else:
+        #         losses["loss_sem_seg"] = (
+        #             F.cross_entropy(x, targets, reduction="mean", ignore_index=self.ignore_value)
+        #             * self.loss_weight
+        #         )
+        #     return [], losses
+        # else:
+        #     return x, {}
 
-    def losses(self, predictions, targets):
-        predictions = F.interpolate(
-            predictions, scale_factor=self.common_stride, mode="bilinear", align_corners=False
-        )
-        loss = F.cross_entropy(
-            predictions, targets, reduction="mean", ignore_index=self.ignore_value
-        )
-        losses = {"loss_sem_seg": loss * self.loss_weight}
-        return losses
+        losses = {}
+        if not targets is None:
+            if self.use_lovasz:
+                losses["loss_sem_seg"] = (
+                    (F.cross_entropy(x, targets, reduction="mean", ignore_index=self.ignore_value)
+                    + lovasz_softmax(F.softmax(x, 1), targets, ignore=self.ignore_value))
+                    * self.loss_weight
+                )
+            else:
+                losses["loss_sem_seg"] = (
+                    F.cross_entropy(x, targets, reduction="mean", ignore_index=self.ignore_value)
+                    * self.loss_weight
+                )
+        else:
+            losses["loss_sem_seg"] = None
+        return x, losses
+        # Bacon
